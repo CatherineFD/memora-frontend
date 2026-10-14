@@ -1,117 +1,133 @@
-// src/shared/api/httpClient.ts
+type SearchParams = { [key: string]: string | string[] | undefined };
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? '/api';
+interface RequestOptions extends RequestInit {
+  headers?: Record<string, string>;
+  params?: SearchParams;
+}
 
-export class HttpError extends Error {
-  readonly status: number;
-  readonly statusText: string;
-  readonly data: unknown;
+export type RequestConfig<Payload = undefined> = Payload extends undefined
+  ? { options?: RequestOptions }
+  : { payload: Payload; options?: RequestOptions };
 
-  constructor(
-    status: number,
-    statusText: string,
-    data: unknown,
-    url: string,
+export type ApiResponse<Data> = Promise<CustomResponse<Data>>;
+
+type CustomResponse<Data> = {
+  success: boolean;
+  status: number;
+  statusText: string;
+  data: Data;
+};
+
+export class HttpClient {
+  private baseUrl: string;
+  public headers?: Record<string, string>;
+
+  private token?: string;
+
+  constructor(init: { baseUrl: string; headers?: Record<string, string> }) {
+    this.baseUrl = init.baseUrl;
+    this.headers = init.headers;
+  }
+
+  setToken(token: string) {
+    this.token = token;
+  }
+
+  private createSearchParams(params: SearchParams) {
+    const searchParams = new URLSearchParams();
+
+    for (const key in params) {
+      if (Object.prototype.hasOwnProperty.call(params, key)) {
+        const value = params[key];
+
+        if (Array.isArray(value)) {
+          value.forEach((currentValue) =>
+            searchParams.append(key, currentValue),
+          );
+        } else if (value) {
+          searchParams.set(key, value);
+        }
+      }
+    }
+
+    return `?${searchParams.toString()}`;
+  }
+
+  private async request<T>(
+    endpoint: string,
+    method: RequestInit["method"],
+    options: RequestOptions = {},
+  ): ApiResponse<T> {
+    console.info("REQUEST:", method, endpoint, new Date());
+
+    let url = `${this.baseUrl}/${endpoint}`;
+    if (options.params) {
+      url += this.createSearchParams(options.params);
+    }
+
+    const config = {
+      ...options,
+      url: endpoint,
+      method,
+      headers: {
+        ...(!!options?.headers && options.headers),
+        ...this.headers,
+        ...(!!this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    };
+
+    const response: Response = await fetch(url, config);
+
+    return {
+      success: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      data: (await response.json()) as unknown as T,
+    };
+  }
+
+  get<T>(endpoint: string, options: Omit<RequestOptions, "body"> = {}) {
+    return this.request<T>(endpoint, "GET", options);
+  }
+
+  delete<T>(endpoint: string, options: Omit<RequestOptions, "body"> = {}) {
+    return this.request<T>(endpoint, "DELETE", options);
+  }
+
+  post<T>(
+    endpoint: string,
+    body?: Record<string, unknown>,
+    options: RequestOptions = {},
   ) {
-    super(`HTTP error ${status} ${statusText}: ${url}`);
-    this.name = 'HttpError';
-    this.status = status;
-    this.statusText = statusText;
-    this.data = data;
+    return this.request<T>(endpoint, "POST", {
+      ...options,
+      ...(!!body && { body: JSON.stringify(body) }),
+    });
+  }
+
+  put<T>(
+    endpoint: string,
+    body?: Record<string, unknown>,
+    options: RequestOptions = {},
+  ) {
+    return this.request<T>(endpoint, "PUT", {
+      ...options,
+      ...(!!body && { body: JSON.stringify(body) }),
+    });
+  }
+
+  patch<T>(
+    endpoint: string,
+    body?: Record<string, unknown>,
+    options: RequestOptions = {},
+  ) {
+    return this.request<T>(endpoint, "PATCH", {
+      ...options,
+      ...(!!body && { body: JSON.stringify(body) }),
+    });
   }
 }
 
-type RequestOptions = Omit<RequestInit, 'body'> & {
-  body?: unknown;
-  signal?: AbortSignal;
-};
-
-async function parseResponse(response: Response): Promise<unknown> {
-  const contentType = response.headers.get('content-type') ?? '';
-
-  if (!contentType.includes('application/json')) {
-    return response.text();
-  }
-
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function httpClient<TResponse>(
-  endpoint: string,
-  options: RequestOptions = {},
-): Promise<TResponse> {
-  const { body, headers, signal, ...restOptions } = options;
-
-  const isFormData = body instanceof FormData;
-
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
-    ...restOptions,
-    signal,
-    headers: {
-      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...headers,
-    },
-    body: body === undefined
-      ? undefined
-      : isFormData
-        ? body
-        : JSON.stringify(body),
-  });
-
-  const data = await parseResponse(response);
-
-  if (!response.ok) {
-    throw new HttpError(
-      response.status,
-      response.statusText,
-      data,
-      response.url,
-    );
-  }
-
-  return data as TResponse;
-}
-
-export const http = {
-  get<TResponse>(endpoint: string, options?: RequestOptions) {
-    return httpClient<TResponse>(endpoint, {
-      ...options,
-      method: 'GET',
-    });
-  },
-
-  post<TResponse>(endpoint: string, body?: unknown, options?: RequestOptions) {
-    return httpClient<TResponse>(endpoint, {
-      ...options,
-      method: 'POST',
-      body,
-    });
-  },
-
-  put<TResponse>(endpoint: string, body?: unknown, options?: RequestOptions) {
-    return httpClient<TResponse>(endpoint, {
-      ...options,
-      method: 'PUT',
-      body,
-    });
-  },
-
-  patch<TResponse>(endpoint: string, body?: unknown, options?: RequestOptions) {
-    return httpClient<TResponse>(endpoint, {
-      ...options,
-      method: 'PATCH',
-      body,
-    });
-  },
-
-  delete<TResponse>(endpoint: string, options?: RequestOptions) {
-    return httpClient<TResponse>(endpoint, {
-      ...options,
-      method: 'DELETE',
-    });
-  },
-};
+export const httpClient = new HttpClient({
+  baseUrl: import.meta.env.VITE_API_URL ?? '/api',
+});
